@@ -8,49 +8,66 @@ use std::collections::HashMap;
 use urlencoding::decode;
 use log::{debug, error, log_enabled, info, Level};
 use regex::Regex;
+use clap::{Parser,CommandFactory};
+use clap_complete::generate;
+
+mod cli_parse;
+use cli_parse::*;
 
 type CmdMPSC = (AmiAction, Option<oneshot::Sender<Result<AmiResponse, AmiError>>>);
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    let options = ManagerOptions {
-        port: 8106,
-        host: "localhost".to_string(),
-        username: "tucker".to_string(),
-        password: "pulse-harbor-patrol-bodacious".to_string(),
-        events: true,
-    };
+    let args = Cli::parse();
+    if let Commands::Completions { command_name, shell } = &args.command {
+        generate(shell.clone(), &mut Cli::command(),
+            command_name.clone().unwrap_or(std::env::args().next().unwrap()),
+            &mut std::io::stdout());
+        std::process::exit(0);
+    }
+    if let Commands::Server { system_name, host, port, ami_user, password } = &args.command {
+        let options = ManagerOptions {
+            port: *port,
+            host: host.clone(),
+            username: ami_user.clone(),
+            password: password.clone(),
+            events: true,
+        };
 
-    let mut manager = Manager::new();
-    manager.connect_and_login(options).await?;
-    info!("Successfully connected to AMI!");
+        let mut manager = Manager::new();
+        manager.connect_and_login(options).await?;
+        info!("Successfully connected to AMI!");
 
-    let mut events = manager.all_events_stream().await;
-    let (cmd_tx, mut cmd_rx) = mpsc::channel::<CmdMPSC>(100);
-    let (event_tx, _) = broadcast::channel::<AmiEvent>(100);
-    loop {
-        select! {
-            evx = events.next() => {
-                if let Some(Ok(ev)) = evx {
-                    handle_event(ev, &cmd_tx, &event_tx).await;
+        let mut events = manager.all_events_stream().await;
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<CmdMPSC>(100);
+        let (event_tx, _) = broadcast::channel::<AmiEvent>(100);
+        loop {
+            select! {
+                evx = events.next() => {
+                    if let Some(Ok(ev)) = evx {
+                        handle_event(ev, &cmd_tx, &event_tx,
+                            system_name.clone()).await;
+                    }
                 }
-            }
-            cmd = cmd_rx.recv() => {
-                if let Some((action, resp_tx_opt)) = cmd {
-                    let res = manager.send_action(action).await;
-                    if let Some(resp_tx) = resp_tx_opt {
-                        resp_tx.send(res).unwrap();
+                cmd = cmd_rx.recv() => {
+                    if let Some((action, resp_tx_opt)) = cmd {
+                        let res = manager.send_action(action).await;
+                        if let Some(resp_tx) = resp_tx_opt {
+                            resp_tx.send(res).unwrap();
+                        }
                     }
                 }
             }
         }
     }
+    Ok(())
 }
 
 async fn handle_event(ev: AmiEvent,
     cmd_tx: &mpsc::Sender<CmdMPSC>,
-    event_tx: &broadcast::Sender<AmiEvent>) {
+    event_tx: &broadcast::Sender<AmiEvent>,
+    system_name: String) {
 
     if event_tx.receiver_count() != 0 {
         let _ = event_tx.send(ev.clone());
@@ -60,7 +77,8 @@ async fn handle_event(ev: AmiEvent,
             let cmd_txc = cmd_tx.clone();
             let event_rxc = event_tx.subscribe();
             tokio::spawn(async move {
-                let _ = async_agi_task(f, cmd_txc, event_rxc).await;
+                let _ = async_agi_task(f, cmd_txc, event_rxc,
+                    system_name.clone()).await;
             });
         }
     }
@@ -68,7 +86,8 @@ async fn handle_event(ev: AmiEvent,
 
 async fn async_agi_task(fs: HashMap<String, String>,
     cmd_tx: mpsc::Sender<CmdMPSC>,
-    event_rx: broadcast::Receiver<AmiEvent>) -> Result<()> {
+    event_rx: broadcast::Receiver<AmiEvent>,
+    system_name: String) -> Result<()> {
 
     let mut env: HashMap<String, String> = HashMap::new();
     for line in decode(fs.get("Env").ok_or(anyhow!("Missing key"))?)?.split("\n") {
@@ -76,7 +95,7 @@ async fn async_agi_task(fs: HashMap<String, String>,
             env.insert(k.to_string(), v.to_string());
         }
     }
-    if env.get("agi_arg_1").ok_or(anyhow!("Missing system"))? != "two_agi_rs_prod" {
+    if *env.get("agi_arg_1").ok_or(anyhow!("Missing system"))? != system_name {
         return Ok(())
     }
     let chan = fs.get("Channel").ok_or(anyhow!("Missing channel"))?.clone();
