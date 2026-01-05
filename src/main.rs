@@ -104,7 +104,7 @@ async fn async_agi_task(fs: HashMap<String, String>,
     if let Some(arg2) = env.get("agi_arg_2") {
         debug!("{:40} → entrypt called with {}", chan, arg2);
         let res = match arg2.as_str() {
-            "ringback" => ringback_task(ca, env).await,
+            "ringback" => ringback_task(ca, env, system_name).await,
             "ringback_playback" => ringback_playback_task(ca, env).await,
             _ => {Ok(())}
         };
@@ -113,7 +113,9 @@ async fn async_agi_task(fs: HashMap<String, String>,
     } else {Ok(())}
 }
 
-async fn ringback_task(mut ca: ChannelAssociated, env: HashMap<String, String>) -> Result<()> {
+async fn ringback_task(mut ca: ChannelAssociated, env: HashMap<String, String>,
+    system_name: String) -> Result<()> {
+
     debug!("{:40} → Starting ringback_task", ca.chan);
     let uniqueid = env.get("agi_uniqueid").ok_or(anyhow!("Cannot get uniqueid"))?.to_string();
     let callerid = env.get("agi_callerid").ok_or(anyhow!("Cannot get callerid"))?.to_string();
@@ -160,15 +162,15 @@ async fn ringback_task(mut ca: ChannelAssociated, env: HashMap<String, String>) 
                 action: "Originate".to_string(),
                 params: if do_rec {
                     HashMap::from([
-                        ("Channel".to_string(), format!("Local/{}@from-internal", callerid)),
+                        ("Channel".to_string(), format!("Local/{}@from-internal", callerid)), // FIXME
                         ("Application".to_string(), "AGI".to_string()),
-                        ("Data".to_string(), format!("agi:async,two_agi_rs_prod,ringback_playback,{}", uniqueid)),
+                        ("Data".to_string(), format!("agi:async,{},ringback_playback,{}", system_name, uniqueid)),
                     ])
                 } else {
                     HashMap::from([
-                        ("Channel".to_string(), format!("Local/{}@from-internal", callerid)),
+                        ("Channel".to_string(), format!("Local/{}@from-internal", callerid)), // FIXME
                         ("Application".to_string(), "AGI".to_string()),
-                        ("Data".to_string(), "agi:async,two_agi_rs_prod,ringback,,,".to_string()),
+                        ("Data".to_string(), format!("agi:async,{},ringback,,,", system_name)),
                     ])
                 },
                 action_id: None
