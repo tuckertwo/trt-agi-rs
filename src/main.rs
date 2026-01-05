@@ -128,10 +128,10 @@ async fn ringback_task(mut ca: ChannelAssociated, env: HashMap<String, String>,
     ca.agi(String::from("answer")).await?;
     sleep(Duration::from_millis(1)).await;
 
-    let time_r = if let Some(time_r) = env.get("agi_arg_4") {
-        time_r
-    } else {
-        "000"
+    let time_r = match env.get("agi_arg_4") {
+        Some(x) if x == "" => "000",
+        Some(x) => x,
+        None => "000",
     };
 
     if do_rec {
@@ -149,7 +149,7 @@ async fn ringback_task(mut ca: ChannelAssociated, env: HashMap<String, String>,
         }
     }
 
-    if time_r != "" {
+    if time_r != "-1" {
         let time_r_s = time_r.split_at_checked(time_r.len()-1)
             .ok_or(anyhow!("Time too short"))?;
         let time_mant = time_r_s.0.parse::<u64>()?;
@@ -170,7 +170,7 @@ async fn ringback_task(mut ca: ChannelAssociated, env: HashMap<String, String>,
                     HashMap::from([
                         ("Channel".to_string(), format!("Local/{}@from-internal", callerid)), // FIXME
                         ("Application".to_string(), "AGI".to_string()),
-                        ("Data".to_string(), format!("agi:async,{},ringback,,,", system_name)),
+                        ("Data".to_string(), format!("agi:async,{},ringback,,-1,", system_name)),
                     ])
                 },
                 action_id: None
